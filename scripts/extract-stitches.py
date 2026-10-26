@@ -2,8 +2,8 @@
 """Extract the cross-stitch motifs from ucalyptus.me's background tile.
 
 Reads stitch-tile-ink.svg (ucalyptus.github.io/assets/images/) and writes
-stitches.js: each distinct motif shape as integer stitch-grid offsets from
-its centre, plus where every motif sits on the tile.
+stitches.js: the stitch geometry and each distinct motif shape as integer
+stitch-grid offsets from its centre.
 
     python3 scripts/extract-stitches.py path/to/stitch-tile-ink.svg > stitches.js
 """
@@ -55,7 +55,7 @@ def main(svg_path):
     for i, c in enumerate(centres):
         clusters[find(i)].append(c)
 
-    shapes, motifs = [], []
+    shapes = []
     for pts in clusters.values():
         rx, ry = pts[0]
         pts = [(rx + wrap(x - rx), ry + wrap(y - ry)) for x, y in pts]  # unwrap across tile edges
@@ -64,8 +64,6 @@ def main(svg_path):
         offsets = frozenset((round((x - cx) / pitch), round((y - cy) / pitch)) for x, y in pts)
         if offsets not in shapes:
             shapes.append(offsets)
-        motifs.append((cx % size, cy % size, shapes.index(offsets)))
-    motifs.sort(key=lambda m: (m[1], m[0]))
 
     def flat(offsets):
         return ",".join(f"{x},{y}" for x, y in sorted(offsets, key=lambda p: (p[1], p[0])))
@@ -77,10 +75,6 @@ def main(svg_path):
         "  // motif shapes: flat [x, y, ...] stitch offsets from the motif centre, in stitch-grid steps",
         "  shapes: [",
         *[f"    [{flat(s)}]," for s in shapes],
-        "  ],",
-        "  // motifs on the tile: [centre x, centre y, shape index]",
-        "  motifs: [",
-        *[f"    [{x:.2f}, {y:.2f}, {s}]," for x, y, s in motifs],
         "  ]",
         "};",
     ]

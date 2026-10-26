@@ -115,44 +115,47 @@
     </style>
   </head>
   <body>
-    <canvas id="stage" aria-label="The ucalyptus.me cross-stitch background tile, animated: each motif breathes like an organism, its centre still while its arms contract and expand"></canvas>
+    <canvas id="stage" aria-label="Cross-stitch organisms in the style of the ucalyptus.me background, each one a unique design, swimming: centres still, arms contracting and expanding"></canvas>
 
     <div class="caption">
       <h1>The tile, alive.</h1>
       <p>
-        The cross-stitch tile behind ucalyptus.me, alive. Each motif is its own
-        organism: the centre holds still while the arms contract and expand,
-        and every contraction pushes it along. Each keeps its own personal
-        space; the ones that don't bump, rebound and flinch. Click one to
-        startle it away.
+        The cross-stitch motifs behind ucalyptus.me, alive, and like
+        snowflakes no two alike: the site's five originals swim among
+        descendants grown fresh on every visit. Each holds its centre still
+        while its arms contract and expand, and every contraction pushes it
+        along. Each keeps its own personal space; the ones that don't bump,
+        rebound and flinch. Click one to startle it away.
       </p>
     </div>
 
     <div class="panel" role="group" aria-label="Animation controls">
       <button id="btnPlay" type="button">Pause</button>
       <button id="btnInk" type="button" aria-pressed="false">Full ink</button>
-      <button id="btnDrift" type="button" aria-pressed="false">Drift</button>
+      <button id="btnNew" type="button">New brood</button>
       <label>Tempo <input id="rngTempo" type="range" min="0.25" max="3" step="0.05" value="1" /></label>
     </div>
 
     <script src="stitches.js"></script>
+    <script src="designs.js"></script>
     <script>
     (function () {
       "use strict";
 
       var D = window.STITCH_TILE;
-      var T = D.size, PITCH = D.pitch, ARM = D.arm, STROKE = D.stroke;
-      var TILE_CSS = 720;                       // the site's $site-background-tile-size
-      var EDGE = ARM + STROKE;                  // stitches this close to a tile edge also paint across it
+      var PITCH = D.pitch, ARM = D.arm, STROKE = D.stroke;
+      var UNIT_PX = 720 / D.size;               // the site draws its 960-unit tile at 720px
+      var DENSITY = 12 / (D.size * D.size);     // organisms per square unit: the site tile holds 12
+      var EDGE = ARM + STROKE;                  // stitches this close to a world edge also paint across it
       var INK_FAINT = "rgb(227, 227, 227)";     // #141414 under the site's 0.88 white scrim
       var INK_FULL = "#141414";
 
-      // Organism tuning. Distances are in tile units (960 per tile).
+      // Organism tuning. Distances are in site tile units (8 per stitch).
       var CORE = 3 * PITCH;      // stitches within this radius of the centre never move
       var PULSE = 0.2;           // arms stretch to 1 + PULSE and contract to 1 - PULSE of their length
       var LAG = 2.4;             // radians of phase lag from arm root to tip: the pulse travels outward
       var CURL = 0.16;           // radians the tips sweep sideways during a stroke
-      var WAKE = 1.5;            // seconds to ease from the still tile into full motion
+      var WAKE = 1.5;            // seconds to ease from stillness into full motion
 
       // Travel tuning: tile units, seconds.
       var THRUST = 40;           // forward push per unit of contraction speed
@@ -169,30 +172,77 @@
       if (params.has("bare")) document.documentElement.classList.add("bare");
 
       function mod(v, m) { return ((v % m) + m) % m; }
-      function wrapT(d) { return d - T * Math.round(d / T); }
       function wrapPi(a) { return a - 2 * Math.PI * Math.round(a / (2 * Math.PI)); }
       function wake(t) { var w = Math.min(1, t / WAKE); return w * w * (3 - 2 * w); }
 
-      // Each stitch keeps its polar position around its motif centre; `reach`
-      // is 0 at the edge of the still core and 1 at the farthest tip.
-      var MOTIFS = D.motifs.map(function (m, i) {
-        var flat = D.shapes[m[2]], stitches = [], rMax = 0, k;
+      // Seeded so `?seed=N` brings back a brood; otherwise every visit is new.
+      function mulberry32(a) {
+        return function () {
+          a = (a + 0x6D2B79F5) | 0;
+          var t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      // The world is the viewport, wrapping at its edges, in tile units.
+      var W = 0, H = 0;
+      function wrapX(d) { return d - W * Math.round(d / W); }
+      function wrapY(d) { return d - H * Math.round(d / H); }
+
+      var MOTIFS = [];
+      var simTime = 0;
+
+      // Each stitch keeps its polar position around its organism's centre;
+      // `reach` is 0 at the edge of the still core and 1 at the farthest tip.
+      function organism(flat, x, y, rand) {
+        var stitches = [], rMax = 0, k;
         for (k = 0; k < flat.length; k += 2) rMax = Math.max(rMax, Math.hypot(flat[k], flat[k + 1]) * PITCH);
         for (k = 0; k < flat.length; k += 2) {
-          var x = flat[k] * PITCH, y = flat[k + 1] * PITCH, r = Math.hypot(x, y);
-          stitches.push({ r: r, a: Math.atan2(y, x), reach: Math.max(0, r - CORE) / (rMax - CORE) });
+          var sx = flat[k] * PITCH, sy = flat[k + 1] * PITCH, r = Math.hypot(sx, sy);
+          stitches.push({ r: r, a: Math.atan2(sy, sx), reach: Math.max(0, r - CORE) / (rMax - CORE) });
         }
         return {
-          x: m[0], y: m[1], vx: 0, vy: 0, ax: 0, ay: 0,
+          x: x, y: y, vx: 0, vy: 0, ax: 0, ay: 0,
           stitches: stitches, rMax: rMax, mass: stitches.length,
-          omega: 2 * Math.PI / (3.4 + 1.6 * mod(i * 0.618, 1)),   // each organism keeps its own rhythm
-          phase: i * 2.39996,
-          heading: i * 2.39996 * 3,
-          vigor: 0.7 + 0.6 * Math.random(),
-          space: SPACE_MIN + (SPACE_MAX - SPACE_MIN) * Math.random(),
+          omega: 2 * Math.PI / (3.4 + 1.6 * rand()),   // each organism keeps its own rhythm
+          phase: rand() * 2 * Math.PI,
+          heading: rand() * 2 * Math.PI,
+          curlPhase: rand() * 2 * Math.PI,
+          vigor: 0.7 + 0.6 * rand(),
+          space: SPACE_MIN + (SPACE_MAX - SPACE_MIN) * rand(),
           pokedAt: -Infinity
         };
-      });
+      }
+
+      // A brood fills the viewport at the site's density: the five original
+      // motifs, once each, and the rest grown as one-of-a-kind descendants.
+      // Organisms are dropped where they don't touch anyone if there's room.
+      function brood(seed) {
+        var rand = mulberry32(seed);
+        var count = Math.max(1, Math.round(W * H * DENSITY));
+        var originals = D.shapes.slice();
+        for (var i = originals.length - 1; i > 0; i--) {
+          var j = Math.floor(rand() * (i + 1)), swap = originals[i];
+          originals[i] = originals[j]; originals[j] = swap;
+        }
+        originals = originals.slice(0, count);
+        var designs = originals.concat(window.growDesigns(rand, count - originals.length, D.shapes));
+        MOTIFS = [];
+        designs.forEach(function (flat) {
+          var o = organism(flat, 0, 0, rand), best = null, bestGap = -Infinity;
+          for (var tries = 0; tries < 60 && bestGap < PITCH; tries++) {
+            var x = rand() * W, y = rand() * H, gap = Infinity;
+            MOTIFS.forEach(function (m) {
+              gap = Math.min(gap, Math.hypot(wrapX(m.x - x), wrapY(m.y - y)) - m.rMax - o.rMax);
+            });
+            if (gap > bestGap) { bestGap = gap; best = [x, y]; }
+          }
+          o.x = best[0]; o.y = best[1];
+          MOTIFS.push(o);
+        });
+        simTime = 0;
+      }
 
       // Fast contraction, slower relaxation: sin with a second harmonic, in [-1, 1].
       function beat(p) { return (Math.sin(p) - 0.3 * Math.sin(2 * p)) / 1.25; }
@@ -211,7 +261,7 @@
             f -= env * (0.3 - 0.08 * Math.sin(9 * since - 4 * s.reach));
           }
           dr = (s.r - CORE) * f * life;
-          da = CURL * s.reach * s.reach * Math.sin(0.5 * m.omega * t + m.phase * 1.7 + 1.1) * life;
+          da = CURL * s.reach * s.reach * Math.sin(0.5 * m.omega * t + m.curlPhase) * life;
         }
         var r = s.r + dr, a = s.a + da;
         out.x = m.x + r * Math.cos(a);
@@ -235,7 +285,7 @@
         for (i = 0; i < MOTIFS.length; i++) {
           for (j = i + 1; j < MOTIFS.length; j++) {
             m = MOTIFS[i]; n = MOTIFS[j];
-            var dx = wrapT(n.x - m.x), dy = wrapT(n.y - m.y), d = Math.hypot(dx, dy) || 1e-6;
+            var dx = wrapX(n.x - m.x), dy = wrapY(n.y - m.y), d = Math.hypot(dx, dy) || 1e-6;
             var nx = dx / d, ny = dy / d, gap = d - m.rMax - n.rMax;
             if (gap < m.space) { k = AVOID * (1 - Math.max(gap, 0) / m.space); m.ax -= nx * k; m.ay -= ny * k; }
             if (gap < n.space) { k = AVOID * (1 - Math.max(gap, 0) / n.space); n.ax += nx * k; n.ay += ny * k; }
@@ -256,8 +306,8 @@
           m = MOTIFS[i];
           m.vx = (m.vx + m.ax * dt) * drag;
           m.vy = (m.vy + m.ay * dt) * drag;
-          m.x = mod(m.x + m.vx * dt, T);
-          m.y = mod(m.y + m.vy * dt, T);
+          m.x = mod(m.x + m.vx * dt, W);
+          m.y = mod(m.y + m.vy * dt, H);
           var turn = WANDER * Math.sin(0.23 * t + m.phase) * Math.sin(0.11 * t + 2 * m.phase);
           if (Math.hypot(m.vx, m.vy) > 2) turn += 0.8 * wrapPi(Math.atan2(m.vy, m.vx) - m.heading);
           m.heading += turn * dt;
@@ -265,96 +315,86 @@
       }
 
       // --- drawing -------------------------------------------------------------
-      // One 720px tile is redrawn per frame (about 1,800 stitches), then laid
-      // across the viewport like the site's repeating background.
       var stage = document.getElementById("stage");
       var ctx = stage.getContext("2d");
-      var tile = document.createElement("canvas");
-      var tctx = tile.getContext("2d");
-      var dpr = 1, tileDirty = true, stageDirty = true;
+      var dpr = 1, dirty = true;
       var fullInk = params.get("ink") === "full";
-      var drift = params.has("drift"), driftX = 0, driftY = 0;
-      var simTime = 0;
       var pos = { x: 0, y: 0 };
 
       function cross(X, Y) {
-        tctx.moveTo(X - ARM, Y - ARM); tctx.lineTo(X + ARM, Y + ARM);
-        tctx.moveTo(X + ARM, Y - ARM); tctx.lineTo(X - ARM, Y + ARM);
+        ctx.moveTo(X - ARM, Y - ARM); ctx.lineTo(X + ARM, Y + ARM);
+        ctx.moveTo(X + ARM, Y - ARM); ctx.lineTo(X - ARM, Y + ARM);
       }
 
-      // Adds one x stitch to the current path, repeated across the tile edges
-      // it overlaps so the tile stays seamless.
+      // Adds one x stitch to the current path, repeated across the world
+      // edges it overlaps so organisms swim out one side and in the other.
       function stitch(x, y) {
-        x = mod(x, T); y = mod(y, T);
-        var x2 = x < EDGE ? x + T : x > T - EDGE ? x - T : NaN;
-        var y2 = y < EDGE ? y + T : y > T - EDGE ? y - T : NaN;
+        x = mod(x, W); y = mod(y, H);
+        var x2 = x < EDGE ? x + W : x > W - EDGE ? x - W : NaN;
+        var y2 = y < EDGE ? y + H : y > H - EDGE ? y - H : NaN;
         cross(x, y);
         if (!isNaN(x2)) cross(x2, y);
         if (!isNaN(y2)) cross(x, y2);
         if (!isNaN(x2) && !isNaN(y2)) cross(x2, y2);
       }
 
-      function drawTile() {
-        tctx.setTransform(1, 0, 0, 1, 0, 0);
-        tctx.fillStyle = "#fff";
-        tctx.fillRect(0, 0, tile.width, tile.height);
-        var k = tile.width / T;
-        tctx.setTransform(k, 0, 0, k, 0, 0);
-        tctx.strokeStyle = fullInk ? INK_FULL : INK_FAINT;
-        tctx.lineCap = "round";
-        tctx.lineWidth = STROKE;
+      function draw() {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, stage.width, stage.height);
+        var k = dpr * UNIT_PX;
+        ctx.setTransform(k, 0, 0, k, 0, 0);
+        ctx.strokeStyle = fullInk ? INK_FULL : INK_FAINT;
+        ctx.lineCap = "round";
+        ctx.lineWidth = STROKE;
         var t = simTime, life = wake(t);
-        tctx.beginPath();
+        ctx.beginPath();
         MOTIFS.forEach(function (m) {
           m.stitches.forEach(function (s) { place(m, s, t, life, pos); stitch(pos.x, pos.y); });
         });
-        tctx.stroke();
+        ctx.stroke();
       }
 
-      function drawStage() {
-        var size = tile.width;
-        var ox = -mod(Math.round(driftX * dpr), size), oy = -mod(Math.round(driftY * dpr), size);
-        for (var y = oy; y < stage.height; y += size) {
-          for (var x = ox; x < stage.width; x += size) ctx.drawImage(tile, x, y);
-        }
-      }
-
+      // Resizing stretches the world; organisms keep their relative places.
       function resize() {
         dpr = Math.min(window.devicePixelRatio || 1, 2);
-        var size = Math.round(TILE_CSS * dpr);
-        if (tile.width !== size) { tile.width = tile.height = size; tileDirty = true; }
         stage.width = Math.round(window.innerWidth * dpr);
         stage.height = Math.round(window.innerHeight * dpr);
-        stageDirty = true;
+        var w = window.innerWidth / UNIT_PX, h = window.innerHeight / UNIT_PX;
+        if (W && H) MOTIFS.forEach(function (m) { m.x *= w / W; m.y *= h / H; });
+        W = w; H = h;
+        dirty = true;
       }
       window.addEventListener("resize", resize);
       resize();
+      brood(params.has("seed") ? parseInt(params.get("seed"), 10) : Math.floor(Math.random() * 2147483647));
 
       // --- controls ------------------------------------------------------------
       var playing = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       var tempo = 1;
       var btnPlay = document.getElementById("btnPlay");
       var btnInk = document.getElementById("btnInk");
-      var btnDrift = document.getElementById("btnDrift");
 
       function syncControls() {
         btnPlay.textContent = playing ? "Pause" : "Play";
         btnInk.setAttribute("aria-pressed", String(fullInk));
-        btnDrift.setAttribute("aria-pressed", String(drift));
       }
       syncControls();
 
       btnPlay.addEventListener("click", function () { playing = !playing; syncControls(); });
-      btnInk.addEventListener("click", function () { fullInk = !fullInk; tileDirty = true; syncControls(); });
-      btnDrift.addEventListener("click", function () { drift = !drift; syncControls(); });
+      btnInk.addEventListener("click", function () { fullInk = !fullInk; dirty = true; syncControls(); });
+      document.getElementById("btnNew").addEventListener("click", function () {
+        brood(Math.floor(Math.random() * 2147483647));
+        dirty = true;
+      });
       document.getElementById("rngTempo").addEventListener("input", function (e) { tempo = parseFloat(e.target.value); });
 
       // Click an organism to startle it: it flinches and darts away from the pointer.
       stage.addEventListener("pointerdown", function (e) {
         if (document.documentElement.classList.contains("bare")) return;
-        var tx = (e.clientX + driftX) * T / TILE_CSS, ty = (e.clientY + driftY) * T / TILE_CSS;
+        var tx = e.clientX / UNIT_PX, ty = e.clientY / UNIT_PX;
         MOTIFS.forEach(function (m) {
-          var dx = wrapT(m.x - tx), dy = wrapT(m.y - ty), d = Math.hypot(dx, dy);
+          var dx = wrapX(m.x - tx), dy = wrapY(m.y - ty), d = Math.hypot(dx, dy);
           if (d >= m.rMax + PITCH) return;
           m.pokedAt = simTime;
           if (d > 0) { m.vx += FLEE * dx / d; m.vy += FLEE * dy / d; }
@@ -371,11 +411,9 @@
         if (playing) {
           var step = dt * tempo, n = Math.ceil(step * 120);
           for (var i = 0; i < n; i++) { simTime += step / n; swim(step / n, simTime, wake(simTime)); }
-          tileDirty = true;
-          if (drift) { driftX += dt * tempo * 9; driftY += dt * tempo * 5; }
+          dirty = true;
         }
-        if (tileDirty) { drawTile(); tileDirty = false; stageDirty = true; }
-        if (stageDirty) { drawStage(); stageDirty = false; }
+        if (dirty) { draw(); dirty = false; }
       }
       requestAnimationFrame(frame);
     })();

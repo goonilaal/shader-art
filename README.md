@@ -1,26 +1,38 @@
 # Shader Art — The tile, alive
 
-The cross-stitch background tile from [ucalyptus.me](https://ucalyptus.me), alive.
+The cross-stitch motifs from the [ucalyptus.me](https://ucalyptus.me) background, alive. Like snowflakes, no two are alike.
 
-The page opens on the site background exactly: the same motifs, stitch for stitch, at the same 720px tile size and faint ink (`#141414` under a 0.88 white scrim). It then eases into motion. Every mark is a real *x* stitch drawn on a canvas, so nothing is warped or resampled.
+The page uses the site's stitch geometry, scale and faint ink (`#141414` under a 0.88 white scrim), and fills the window at the site's density of 12 motifs per 720px square. Each of the site's five original motifs appears once. The rest are grown fresh on every visit, and every organism on screen has a different design. Every mark is a real *x* stitch drawn on a canvas.
 
-Each motif moves like its own organism:
+## Designs
+
+`designs.js` grows each motif the way a snowflake forms. It builds one eighth of the motif and mirrors it into all eight symmetries of the square. Each design picks at random from these parts:
+
+- **Core:** a dot, ring, disc, filled square or diamond.
+- **Arms:** straight and/or diagonal, solid or a running stitch, sometimes with a thick root.
+- **Branches:** side branches and feathers along the arms.
+- **Tips:** T-bars, arrows, forks, diamonds, blobs, anchors, petals or hooks.
+- **Rings:** nested squares, diamonds or circles, solid or dotted.
+
+Every design is checked against the site's originals and the rest of the brood, so none repeat.
+
+## Motion
 
 - **The centre stays still.** Stitches within three stitches of the middle never move.
-- **The arms contract and expand.** Every arm stretches and shortens along its length by up to 20%. Each beat contracts fast and relaxes slowly. It starts at the root and reaches the tips later, so the arm ripples.
-- **One side reaches further.** The strongest side turns slowly, and the tips curl to the side like tentacles.
-- **Each motif has its own rhythm.** Period and phase differ per motif, so the tile never pulses in unison.
-- **It travels.** Every contraction pushes the motif along a slowly wandering heading. The motifs swim across a seamless, wrapping tile.
-- **It keeps its distance.** Each motif draws its own personal space at random between `SPACE_MIN` (0) and `SPACE_MAX` (6 stitches). If a neighbour comes inside that gap, it steers away. A motif with little or no space doesn't steer, so bodies can still touch. When arm tips meet, they rebound elastically, weighted by stitch count, and both motifs flinch.
+- **The arms contract and expand.** Every arm stretches and shortens along its length by up to 20%. Each beat contracts fast and relaxes slowly. It starts at the root and reaches the tips later, so the arm ripples. One side reaches further, and the tips curl like tentacles.
+- **Each organism has its own rhythm.** Period, phase, vigour and starting heading are all random.
+- **It travels.** Every contraction pushes the organism along a slowly wandering heading. The window wraps at its edges.
+- **It keeps its distance.** Each organism draws its own personal space at random between `SPACE_MIN` (0) and `SPACE_MAX` (6 stitches). If a neighbour comes inside that gap, it steers away. An organism with little or no space doesn't steer, so bodies can still touch. When arm tips meet, they rebound elastically, weighted by stitch count, and both organisms flinch.
 
-Click a motif to startle it: the arms snap in, then ripple back out, and it darts away from the pointer. Controls: Pause, Full ink, Drift (slow pan) and Tempo. With reduced motion on, you see the still tile.
+Click an organism to startle it: it flinches and darts away from the pointer. Controls: Pause, Full ink, New brood and Tempo. With reduced motion on, you see the brood standing still.
 
-URL options: `?bare` hides the UI (for embedding as a background), `?ink=full`, `?drift`.
+URL options: `?bare` hides the UI (for embedding as a background), `?ink=full`, and `?seed=N` to bring back the same brood.
 
 ## Files
 
 - `index.html`: the renderer, the motion and the swimming physics. It uses Canvas 2D and has no dependencies. Tuning constants sit at the top of the script: `CORE`, `PULSE`, `LAG` and `CURL` for the pulse; `THRUST`, `DRAG`, `SPACE_MIN`, `SPACE_MAX`, `AVOID` and `RESTITUTION` for travel.
-- `stitches.js`: motif shapes and positions. It is generated, so don't edit it by hand.
+- `designs.js`: the design generator.
+- `stitches.js`: the site's stitch geometry and its five motifs. It is generated, so don't edit it by hand.
 - `scripts/extract-stitches.py`: regenerates `stitches.js` from the site's SVG tile:
 
   ```sh
