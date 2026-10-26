@@ -122,8 +122,9 @@
       <p>
         The cross-stitch tile behind ucalyptus.me, alive. Each motif is its own
         organism: the centre holds still while the arms contract and expand,
-        each pulse rippling out to the tips, one side reaching further than the
-        other. Click one to startle it.
+        and every contraction pushes it along. Each keeps its own personal
+        space; the ones that don't bump, rebound and flinch. Click one to
+        startle it away.
       </p>
     </div>
 
@@ -153,11 +154,24 @@
       var CURL = 0.16;           // radians the tips sweep sideways during a stroke
       var WAKE = 1.5;            // seconds to ease from the still tile into full motion
 
+      // Travel tuning: tile units, seconds.
+      var THRUST = 40;           // forward push per unit of contraction speed
+      var DRAG = 0.6;            // velocity decay per second; cruising speed is about 20 units/s
+      var WANDER = 0.35;         // radians per second the heading drifts on its own
+      var SPACE_MIN = 0;         // each organism's personal space is drawn from [SPACE_MIN, SPACE_MAX]
+      var SPACE_MAX = 6 * PITCH; // as a gap between bodies; 0 means it never steers away
+      var AVOID = 70;            // steering push at the edge of a neighbour's body
+      var RESTITUTION = 0.9;     // bounciness of body contact
+      var BUMP = 6;              // closing speed above which a collision startles both organisms
+      var FLEE = 30;             // kick away from the pointer when clicked
+
       var params = new URLSearchParams(location.search);
       if (params.has("bare")) document.documentElement.classList.add("bare");
 
       function mod(v, m) { return ((v % m) + m) % m; }
       function wrapT(d) { return d - T * Math.round(d / T); }
+      function wrapPi(a) { return a - 2 * Math.PI * Math.round(a / (2 * Math.PI)); }
+      function wake(t) { var w = Math.min(1, t / WAKE); return w * w * (3 - 2 * w); }
 
       // Each stitch keeps its polar position around its motif centre; `reach`
       // is 0 at the edge of the still core and 1 at the farthest tip.
@@ -169,10 +183,13 @@
           stitches.push({ r: r, a: Math.atan2(y, x), reach: Math.max(0, r - CORE) / (rMax - CORE) });
         }
         return {
-          x: m[0], y: m[1], stitches: stitches, rMax: rMax,
+          x: m[0], y: m[1], vx: 0, vy: 0, ax: 0, ay: 0,
+          stitches: stitches, rMax: rMax, mass: stitches.length,
           omega: 2 * Math.PI / (3.4 + 1.6 * mod(i * 0.618, 1)),   // each organism keeps its own rhythm
           phase: i * 2.39996,
-          spin: i % 2 ? 1 : -1,
+          heading: i * 2.39996 * 3,
+          vigor: 0.7 + 0.6 * Math.random(),
+          space: SPACE_MIN + (SPACE_MAX - SPACE_MIN) * Math.random(),
           pokedAt: -Infinity
         };
       });
@@ -186,8 +203,7 @@
       function place(m, s, t, life, out) {
         var dr = 0, da = 0;
         if (s.r > CORE && life > 0) {
-          var heading = m.phase * 3 + m.spin * 0.12 * t + 0.5 * Math.sin(0.07 * t + m.phase);
-          var side = 0.65 + 0.35 * Math.cos(s.a - heading);   // the leading side reaches further
+          var side = 0.65 + 0.35 * Math.cos(s.a - m.heading); // the leading side reaches further
           var f = PULSE * beat(m.omega * t + m.phase - LAG * s.reach) * side;
           var since = t - m.pokedAt;
           if (since >= 0 && since < 4) {                       // startle: snap in, then ripple back out
@@ -200,6 +216,52 @@
         var r = s.r + dr, a = s.a + da;
         out.x = m.x + r * Math.cos(a);
         out.y = m.y + r * Math.sin(a);
+      }
+
+      // --- travel ----------------------------------------------------------------
+      // Every contraction pushes an organism along its heading, which wanders
+      // and swings round to follow wherever a bump sent it. Inside its own
+      // personal space an organism steers away from a neighbour; bodies that
+      // still touch (the arm tips' reach) rebound elastically and flinch.
+      function swim(dt, t, life) {
+        var i, j, m, n, k;
+        for (i = 0; i < MOTIFS.length; i++) {
+          m = MOTIFS[i];
+          var p = m.omega * t + m.phase;
+          var push = THRUST * m.vigor * life * Math.max(0, beat(p) - beat(p + 0.1)) * 10;
+          m.ax = push * Math.cos(m.heading);
+          m.ay = push * Math.sin(m.heading);
+        }
+        for (i = 0; i < MOTIFS.length; i++) {
+          for (j = i + 1; j < MOTIFS.length; j++) {
+            m = MOTIFS[i]; n = MOTIFS[j];
+            var dx = wrapT(n.x - m.x), dy = wrapT(n.y - m.y), d = Math.hypot(dx, dy) || 1e-6;
+            var nx = dx / d, ny = dy / d, gap = d - m.rMax - n.rMax;
+            if (gap < m.space) { k = AVOID * (1 - Math.max(gap, 0) / m.space); m.ax -= nx * k; m.ay -= ny * k; }
+            if (gap < n.space) { k = AVOID * (1 - Math.max(gap, 0) / n.space); n.ax += nx * k; n.ay += ny * k; }
+            if (gap >= 0) continue;
+            var im = 1 / m.mass, iN = 1 / n.mass, corr = -gap / (im + iN);
+            m.x -= nx * corr * im; m.y -= ny * corr * im;
+            n.x += nx * corr * iN; n.y += ny * corr * iN;
+            var closing = (n.vx - m.vx) * nx + (n.vy - m.vy) * ny;
+            if (closing >= 0) continue;
+            var impulse = -(1 + RESTITUTION) * closing / (im + iN);
+            m.vx -= impulse * im * nx; m.vy -= impulse * im * ny;
+            n.vx += impulse * iN * nx; n.vy += impulse * iN * ny;
+            if (closing < -BUMP) m.pokedAt = n.pokedAt = t;
+          }
+        }
+        var drag = Math.exp(-DRAG * dt);
+        for (i = 0; i < MOTIFS.length; i++) {
+          m = MOTIFS[i];
+          m.vx = (m.vx + m.ax * dt) * drag;
+          m.vy = (m.vy + m.ay * dt) * drag;
+          m.x = mod(m.x + m.vx * dt, T);
+          m.y = mod(m.y + m.vy * dt, T);
+          var turn = WANDER * Math.sin(0.23 * t + m.phase) * Math.sin(0.11 * t + 2 * m.phase);
+          if (Math.hypot(m.vx, m.vy) > 2) turn += 0.8 * wrapPi(Math.atan2(m.vy, m.vx) - m.heading);
+          m.heading += turn * dt;
+        }
       }
 
       // --- drawing -------------------------------------------------------------
@@ -241,8 +303,7 @@
         tctx.strokeStyle = fullInk ? INK_FULL : INK_FAINT;
         tctx.lineCap = "round";
         tctx.lineWidth = STROKE;
-        var t = simTime, life = Math.min(1, t / WAKE);
-        life = life * life * (3 - 2 * life);
+        var t = simTime, life = wake(t);
         tctx.beginPath();
         MOTIFS.forEach(function (m) {
           m.stitches.forEach(function (s) { place(m, s, t, life, pos); stitch(pos.x, pos.y); });
@@ -288,12 +349,15 @@
       btnDrift.addEventListener("click", function () { drift = !drift; syncControls(); });
       document.getElementById("rngTempo").addEventListener("input", function (e) { tempo = parseFloat(e.target.value); });
 
-      // Click an organism to startle it.
+      // Click an organism to startle it: it flinches and darts away from the pointer.
       stage.addEventListener("pointerdown", function (e) {
         if (document.documentElement.classList.contains("bare")) return;
         var tx = (e.clientX + driftX) * T / TILE_CSS, ty = (e.clientY + driftY) * T / TILE_CSS;
         MOTIFS.forEach(function (m) {
-          if (Math.hypot(wrapT(tx - m.x), wrapT(ty - m.y)) < m.rMax + PITCH) m.pokedAt = simTime;
+          var dx = wrapT(m.x - tx), dy = wrapT(m.y - ty), d = Math.hypot(dx, dy);
+          if (d >= m.rMax + PITCH) return;
+          m.pokedAt = simTime;
+          if (d > 0) { m.vx += FLEE * dx / d; m.vy += FLEE * dy / d; }
         });
         if (!playing) { playing = true; syncControls(); }
       });
@@ -305,7 +369,8 @@
         var dt = Math.min((now - last) / 1000, 0.05);
         last = now;
         if (playing) {
-          simTime += dt * tempo;
+          var step = dt * tempo, n = Math.ceil(step * 120);
+          for (var i = 0; i < n; i++) { simTime += step / n; swim(step / n, simTime, wake(simTime)); }
           tileDirty = true;
           if (drift) { driftX += dt * tempo * 9; driftY += dt * tempo * 5; }
         }

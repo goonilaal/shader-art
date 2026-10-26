@@ -10,14 +10,16 @@ Each motif moves like its own organism:
 - **The arms contract and expand.** Every arm stretches and shortens along its length by up to 20%. Each beat contracts fast and relaxes slowly. It starts at the root and reaches the tips later, so the arm ripples.
 - **One side reaches further.** The strongest side turns slowly, and the tips curl to the side like tentacles.
 - **Each motif has its own rhythm.** Period and phase differ per motif, so the tile never pulses in unison.
+- **It travels.** Every contraction pushes the motif along a slowly wandering heading. The motifs swim across a seamless, wrapping tile.
+- **It keeps its distance.** Each motif draws its own personal space at random between `SPACE_MIN` (0) and `SPACE_MAX` (6 stitches). If a neighbour comes inside that gap, it steers away. A motif with little or no space doesn't steer, so bodies can still touch. When arm tips meet, they rebound elastically, weighted by stitch count, and both motifs flinch.
 
-Click a motif to startle it: the arms snap in, then ripple back out. Controls: Pause, Full ink, Drift (slow pan) and Tempo. With reduced motion on, you see the still tile.
+Click a motif to startle it: the arms snap in, then ripple back out, and it darts away from the pointer. Controls: Pause, Full ink, Drift (slow pan) and Tempo. With reduced motion on, you see the still tile.
 
 URL options: `?bare` hides the UI (for embedding as a background), `?ink=full`, `?drift`.
 
 ## Files
 
-- `index.html`: the renderer and the motion. It uses Canvas 2D and has no dependencies. The tuning constants (`CORE`, `PULSE`, `LAG`, `CURL`) sit at the top of the script.
+- `index.html`: the renderer, the motion and the swimming physics. It uses Canvas 2D and has no dependencies. Tuning constants sit at the top of the script: `CORE`, `PULSE`, `LAG` and `CURL` for the pulse; `THRUST`, `DRAG`, `SPACE_MIN`, `SPACE_MAX`, `AVOID` and `RESTITUTION` for travel.
 - `stitches.js`: motif shapes and positions. It is generated, so don't edit it by hand.
 - `scripts/extract-stitches.py`: regenerates `stitches.js` from the site's SVG tile:
 
