@@ -1,20 +1,24 @@
 # Shader Art — The tile, alive
 
-The cross-stitch background tile from [ucalyptus.me](https://ucalyptus.me), set moving.
+The cross-stitch background tile from [ucalyptus.me](https://ucalyptus.me), alive.
 
-At rest the page is the site background: the same motifs, stitch for stitch, at the same 720px tile size and faint ink (`#141414` under a 0.88 white scrim). Every mark is a real *x* stitch drawn on a canvas, so nothing is warped or resampled. Motion comes from moving stitches:
+The page opens on the site background exactly: the same motifs, stitch for stitch, at the same 720px tile size and faint ink (`#141414` under a 0.88 white scrim). It then eases into motion. Every mark is a real *x* stitch drawn on a canvas, so nothing is warped or resampled.
 
-- **Crawl**: a motif moves into a neighbouring empty cell. Its leading edge goes first, the tail catches up, and a sideways ripple runs down the body.
-- **Re-stitch**: a motif re-forms as another motif, turning a quarter-turn as it goes. Each stitch travels to a matched stitch in the new shape. Leftover stitches grow in or shrink away.
+Each motif moves like its own organism:
 
-Click a motif to re-stitch it. Click an empty cell to pull a neighbour into it. Controls: Pause, Full ink, Drift (slow pan) and Tempo. Reduced motion shows the still tile.
+- **The centre stays still.** Stitches within three stitches of the middle never move.
+- **The arms contract and expand.** Every arm stretches and shortens along its length by up to 20%. Each beat contracts fast and relaxes slowly. It starts at the root and reaches the tips later, so the arm ripples.
+- **One side reaches further.** The strongest side turns slowly, and the tips curl to the side like tentacles.
+- **Each motif has its own rhythm.** Period and phase differ per motif, so the tile never pulses in unison.
+
+Click a motif to startle it: the arms snap in, then ripple back out. Controls: Pause, Full ink, Drift (slow pan) and Tempo. With reduced motion on, you see the still tile.
 
 URL options: `?bare` hides the UI (for embedding as a background), `?ink=full`, `?drift`.
 
 ## Files
 
-- `index.html`: the renderer and choreography. It uses Canvas 2D and has no dependencies.
-- `stitches.js`: motif shapes and the 4x4 cell grid. It is generated, so don't edit it by hand.
+- `index.html`: the renderer and the motion. It uses Canvas 2D and has no dependencies. The tuning constants (`CORE`, `PULSE`, `LAG`, `CURL`) sit at the top of the script.
+- `stitches.js`: motif shapes and positions. It is generated, so don't edit it by hand.
 - `scripts/extract-stitches.py`: regenerates `stitches.js` from the site's SVG tile:
 
   ```sh

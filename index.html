@@ -115,15 +115,15 @@
     </style>
   </head>
   <body>
-    <canvas id="stage" aria-label="The ucalyptus.me cross-stitch background tile, animated: motifs crawl into empty cells and re-stitch themselves into one another"></canvas>
+    <canvas id="stage" aria-label="The ucalyptus.me cross-stitch background tile, animated: each motif breathes like an organism, its centre still while its arms contract and expand"></canvas>
 
     <div class="caption">
       <h1>The tile, alive.</h1>
       <p>
-        The cross-stitch tile behind ucalyptus.me, set moving. Every mark is
-        still a single <em>x</em> stitch: motifs crawl into the empty cells and
-        re-stitch themselves into their neighbours, a quarter-turn at a time.
-        Click a motif to re-stitch it, or an empty cell to call one over.
+        The cross-stitch tile behind ucalyptus.me, alive. Each motif is its own
+        organism: the centre holds still while the arms contract and expand,
+        each pulse rippling out to the tips, one side reaching further than the
+        other. Click one to startle it.
       </p>
     </div>
 
@@ -140,176 +140,66 @@
       "use strict";
 
       var D = window.STITCH_TILE;
-      var T = D.size, PITCH = D.pitch, ARM = D.arm, STROKE = D.stroke, CELLS = D.cells;
+      var T = D.size, PITCH = D.pitch, ARM = D.arm, STROKE = D.stroke;
       var TILE_CSS = 720;                       // the site's $site-background-tile-size
       var EDGE = ARM + STROKE;                  // stitches this close to a tile edge also paint across it
       var INK_FAINT = "rgb(227, 227, 227)";     // #141414 under the site's 0.88 white scrim
       var INK_FULL = "#141414";
-      var MORPH_SECONDS = 2.8, MIGRATE_SECONDS = 3.4, MAX_EVENTS = 3;
+
+      // Organism tuning. Distances are in tile units (960 per tile).
+      var CORE = 3 * PITCH;      // stitches within this radius of the centre never move
+      var PULSE = 0.2;           // arms stretch to 1 + PULSE and contract to 1 - PULSE of their length
+      var LAG = 2.4;             // radians of phase lag from arm root to tip: the pulse travels outward
+      var CURL = 0.16;           // radians the tips sweep sideways during a stroke
+      var WAKE = 1.5;            // seconds to ease from the still tile into full motion
 
       var params = new URLSearchParams(location.search);
       if (params.has("bare")) document.documentElement.classList.add("bare");
 
-      var SHAPES = D.shapes.map(function (flat) {
-        var pts = [], rMax = 0;
-        for (var i = 0; i < flat.length; i += 2) {
-          var x = flat[i] * PITCH, y = flat[i + 1] * PITCH;
-          pts.push({ x: x, y: y });
-          rMax = Math.max(rMax, Math.hypot(x, y));
-        }
-        return { pts: pts, rMax: rMax };
-      });
-
-      var SLOTS = D.slots.map(function (s, i) {
-        return { x: s[0], y: s[1], shape: s[2], busy: false, col: i % CELLS, row: Math.floor(i / CELLS) };
-      });
-
       function mod(v, m) { return ((v % m) + m) % m; }
       function wrapT(d) { return d - T * Math.round(d / T); }
-      function wrapPi(a) { return a - 2 * Math.PI * Math.round(a / (2 * Math.PI)); }
-      function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
-      function ease(v) { return v < 0.5 ? 4 * v * v * v : 1 - Math.pow(-2 * v + 2, 3) / 2; }
-      function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
 
-      function neighbours(slot) {
-        var c = slot.col, r = slot.row;
-        return [
-          SLOTS[r * CELLS + (c + 1) % CELLS],
-          SLOTS[r * CELLS + (c + CELLS - 1) % CELLS],
-          SLOTS[((r + 1) % CELLS) * CELLS + c],
-          SLOTS[((r + CELLS - 1) % CELLS) * CELLS + c]
-        ];
-      }
+      // Each stitch keeps its polar position around its motif centre; `reach`
+      // is 0 at the edge of the still core and 1 at the farthest tip.
+      var MOTIFS = D.motifs.map(function (m, i) {
+        var flat = D.shapes[m[2]], stitches = [], rMax = 0, k;
+        for (k = 0; k < flat.length; k += 2) rMax = Math.max(rMax, Math.hypot(flat[k], flat[k + 1]) * PITCH);
+        for (k = 0; k < flat.length; k += 2) {
+          var x = flat[k] * PITCH, y = flat[k + 1] * PITCH, r = Math.hypot(x, y);
+          stitches.push({ r: r, a: Math.atan2(y, x), reach: Math.max(0, r - CORE) / (rMax - CORE) });
+        }
+        return {
+          x: m[0], y: m[1], stitches: stitches, rMax: rMax,
+          omega: 2 * Math.PI / (3.4 + 1.6 * mod(i * 0.618, 1)),   // each organism keeps its own rhythm
+          phase: i * 2.39996,
+          spin: i % 2 ? 1 : -1,
+          pokedAt: -Infinity
+        };
+      });
 
-      // --- stitch matching between two motif shapes --------------------------
-      // Greedy closest-pair assignment. Leftover stitches on the larger side
-      // pair with their nearest stitch on the other side and grow in from it
-      // (scale 0 -> 1) or shrink into it (1 -> 0).
-      var matchCache = {};
-      function match(a, b) {
-        var key = a + ">" + b;
-        if (matchCache[key]) return matchCache[key];
-        var A = SHAPES[a].pts, B = SHAPES[b].pts, pairs = [];
-        for (var i = 0; i < A.length; i++) {
-          for (var j = 0; j < B.length; j++) {
-            pairs.push([(A[i].x - B[j].x) * (A[i].x - B[j].x) + (A[i].y - B[j].y) * (A[i].y - B[j].y), i, j]);
+      // Fast contraction, slower relaxation: sin with a second harmonic, in [-1, 1].
+      function beat(p) { return (Math.sin(p) - 0.3 * Math.sin(2 * p)) / 1.25; }
+
+      // Where a stitch sits at time t. The core stays put; beyond it each arm
+      // is scaled along its own length, so arms contract and expand while the
+      // centre holds still.
+      function place(m, s, t, life, out) {
+        var dr = 0, da = 0;
+        if (s.r > CORE && life > 0) {
+          var heading = m.phase * 3 + m.spin * 0.12 * t + 0.5 * Math.sin(0.07 * t + m.phase);
+          var side = 0.65 + 0.35 * Math.cos(s.a - heading);   // the leading side reaches further
+          var f = PULSE * beat(m.omega * t + m.phase - LAG * s.reach) * side;
+          var since = t - m.pokedAt;
+          if (since >= 0 && since < 4) {                       // startle: snap in, then ripple back out
+            var env = (1 - Math.exp(-since * 14)) * Math.exp(-since * 2.2);
+            f -= env * (0.3 - 0.08 * Math.sin(9 * since - 4 * s.reach));
           }
+          dr = (s.r - CORE) * f * life;
+          da = CURL * s.reach * s.reach * Math.sin(0.5 * m.omega * t + m.phase * 1.7 + 1.1) * life;
         }
-        pairs.sort(function (u, v) { return u[0] - v[0]; });
-        var nearA = new Array(B.length), nearB = new Array(A.length);
-        var usedA = new Array(A.length), usedB = new Array(B.length), out = [];
-        pairs.forEach(function (pr) {
-          var i = pr[1], j = pr[2];
-          if (nearB[i] === undefined) nearB[i] = j;
-          if (nearA[j] === undefined) nearA[j] = i;
-          if (usedA[i] || usedB[j]) return;
-          usedA[i] = usedB[j] = true;
-          out.push({ p: A[i], q: B[j], s0: 1, s1: 1 });
-        });
-        A.forEach(function (p, i) { if (!usedA[i]) out.push({ p: p, q: B[nearB[i]], s0: 1, s1: 0 }); });
-        B.forEach(function (q, j) { if (!usedB[j]) out.push({ p: A[nearA[j]], q: q, s0: 0, s1: 1 }); });
-        return (matchCache[key] = out);
-      }
-
-      // --- events --------------------------------------------------------------
-      // Rest state is exact: an idle motif is its shape on its own stitch grid.
-      // Stitches only leave the grid while an event carries them somewhere.
-      var events = [];
-      var simTime = 0;
-
-      // Re-stitch a motif into another shape. Every stitch travels in polar
-      // coordinates around the motif centre plus a shared quarter-turn, so the
-      // body twists as it reforms. All motifs have 90-degree symmetry, so the
-      // turned target lands exactly on the target shape.
-      function startMorph(slot, to) {
-        var from = slot.shape;
-        var turn = (Math.random() < 0.5 ? -0.5 : 0.5) * Math.PI;
-        var rMax = Math.max(SHAPES[from].rMax, SHAPES[to].rMax);
-        var parts = match(from, to).map(function (m) {
-          var r0 = Math.hypot(m.p.x, m.p.y), r1 = Math.hypot(m.q.x, m.q.y);
-          var a0 = Math.atan2(m.p.y, m.p.x), a1 = Math.atan2(m.q.y, m.q.x);
-          if (r0 === 0) a0 = a1;
-          if (r1 === 0) a1 = a0;
-          return { r0: r0, r1: r1, a0: a0, da: wrapPi(a1 - a0) + turn, s0: m.s0, s1: m.s1, delay: 0.4 * r0 / rMax };
-        });
-        slot.busy = true;
-        events.push({
-          t0: simTime, dur: MORPH_SECONDS,
-          draw: function (u, emit) {
-            parts.forEach(function (pt) {
-              var k = clamp01((u - pt.delay) / 0.6), e = ease(k);
-              var r = pt.r0 + (pt.r1 - pt.r0) * e, a = pt.a0 + pt.da * e;
-              var s = (pt.s0 + (pt.s1 - pt.s0) * e) * (1 - 0.22 * Math.sin(Math.PI * k));
-              emit(slot.x + r * Math.cos(a), slot.y + r * Math.sin(a), s, e * Math.PI / 2);
-            });
-          },
-          end: function () { slot.shape = to; slot.busy = false; }
-        });
-      }
-
-      // Crawl a motif into a neighbouring empty cell: the leading edge sets off
-      // first and the tail catches up, with a sideways ripple down the body.
-      function startMigrate(from, to) {
-        var shape = SHAPES[from.shape], id = from.shape;
-        var dx = wrapT(to.x - from.x), dy = wrapT(to.y - from.y);
-        var len = Math.hypot(dx, dy), ux = dx / len, uy = dy / len;
-        var parts = shape.pts.map(function (p) {
-          var front = (p.x * ux + p.y * uy + shape.rMax) / (2 * shape.rMax);
-          return { x: from.x + p.x, y: from.y + p.y, delay: 0.3 * (1 - front), front: front };
-        });
-        var sway = (Math.random() < 0.5 ? -1 : 1) * 0.9 * PITCH;
-        from.shape = -1;
-        from.busy = to.busy = true;
-        events.push({
-          t0: simTime, dur: MIGRATE_SECONDS,
-          draw: function (u, emit) {
-            parts.forEach(function (pt) {
-              var k = clamp01((u - pt.delay) / 0.7), e = ease(k);
-              var side = sway * Math.sin(Math.PI * k) * Math.sin(2 * Math.PI * pt.front);
-              emit(pt.x + dx * e - uy * side, pt.y + dy * e + ux * side, 1 - 0.18 * Math.sin(Math.PI * k), e * Math.PI / 2);
-            });
-          },
-          end: function () { to.shape = id; from.busy = to.busy = false; }
-        });
-      }
-
-      function otherShape(slot) {
-        var avoid = neighbours(slot).map(function (n) { return n.shape; }).concat(slot.shape);
-        var all = SHAPES.map(function (_, i) { return i; });
-        var fresh = all.filter(function (i) { return avoid.indexOf(i) < 0; });
-        return pick(fresh.length ? fresh : all.filter(function (i) { return i !== slot.shape; }));
-      }
-
-      function emptyNeighbour(slot) {
-        var free = neighbours(slot).filter(function (n) { return n.shape < 0 && !n.busy; });
-        return free.length ? pick(free) : null;
-      }
-
-      var nextEventAt = 0.6;
-      function schedule() {
-        if (simTime < nextEventAt) return;
-        nextEventAt = simTime + 0.7 + Math.random() * 1.3;
-        if (events.length >= MAX_EVENTS) return;
-        var idle = SLOTS.filter(function (s) { return !s.busy && s.shape >= 0; });
-        var moves = idle.filter(emptyNeighbour);
-        if (moves.length && (Math.random() < 0.55 || !idle.length)) {
-          var from = pick(moves);
-          startMigrate(from, emptyNeighbour(from));
-        } else if (idle.length) {
-          var slot = pick(idle);
-          startMorph(slot, otherShape(slot));
-        }
-      }
-
-      function step() {
-        for (var i = events.length - 1; i >= 0; i--) {
-          if (simTime - events[i].t0 >= events[i].dur) {
-            events[i].end();
-            events.splice(i, 1);
-            tileDirty = true;
-          }
-        }
-        schedule();
+        var r = s.r + dr, a = s.a + da;
+        out.x = m.x + r * Math.cos(a);
+        out.y = m.y + r * Math.sin(a);
       }
 
       // --- drawing -------------------------------------------------------------
@@ -322,32 +212,24 @@
       var dpr = 1, tileDirty = true, stageDirty = true;
       var fullInk = params.get("ink") === "full";
       var drift = params.has("drift"), driftX = 0, driftY = 0;
-      var partial = [];
+      var simTime = 0;
+      var pos = { x: 0, y: 0 };
 
-      function segment(X, Y, ax, ay, bx, by) {
-        tctx.moveTo(X - ax, Y - ay); tctx.lineTo(X + ax, Y + ay);
-        tctx.moveTo(X - bx, Y - by); tctx.lineTo(X + bx, Y + by);
+      function cross(X, Y) {
+        tctx.moveTo(X - ARM, Y - ARM); tctx.lineTo(X + ARM, Y + ARM);
+        tctx.moveTo(X + ARM, Y - ARM); tctx.lineTo(X - ARM, Y + ARM);
       }
 
-      // Adds one x stitch (centre, scale, rotation) to the current path,
-      // repeated across the tile edges it overlaps so the tile stays seamless.
-      function stitch(x, y, s, a) {
+      // Adds one x stitch to the current path, repeated across the tile edges
+      // it overlaps so the tile stays seamless.
+      function stitch(x, y) {
         x = mod(x, T); y = mod(y, T);
-        var h = ARM * s, c = Math.cos(a) * h, sn = Math.sin(a) * h;
-        var ax = c - sn, ay = sn + c, bx = c + sn, by = sn - c;
         var x2 = x < EDGE ? x + T : x > T - EDGE ? x - T : NaN;
         var y2 = y < EDGE ? y + T : y > T - EDGE ? y - T : NaN;
-        segment(x, y, ax, ay, bx, by);
-        if (x2 === x2) segment(x2, y, ax, ay, bx, by);
-        if (y2 === y2) segment(x, y2, ax, ay, bx, by);
-        if (x2 === x2 && y2 === y2) segment(x2, y2, ax, ay, bx, by);
-      }
-
-      // Full-size stitches share one stroke; shrunken ones are batched by size
-      // so their line width shrinks with them instead of leaving round dots.
-      function emit(x, y, s, a) {
-        if (s >= 0.999) stitch(x, y, 1, a);
-        else if (s > 0.02) partial.push(x, y, s, a);
+        cross(x, y);
+        if (!isNaN(x2)) cross(x2, y);
+        if (!isNaN(y2)) cross(x, y2);
+        if (!isNaN(x2) && !isNaN(y2)) cross(x2, y2);
       }
 
       function drawTile() {
@@ -359,27 +241,13 @@
         tctx.strokeStyle = fullInk ? INK_FULL : INK_FAINT;
         tctx.lineCap = "round";
         tctx.lineWidth = STROKE;
-        partial.length = 0;
-
+        var t = simTime, life = Math.min(1, t / WAKE);
+        life = life * life * (3 - 2 * life);
         tctx.beginPath();
-        SLOTS.forEach(function (slot) {
-          if (slot.busy || slot.shape < 0) return;
-          SHAPES[slot.shape].pts.forEach(function (p) { stitch(slot.x + p.x, slot.y + p.y, 1, 0); });
+        MOTIFS.forEach(function (m) {
+          m.stitches.forEach(function (s) { place(m, s, t, life, pos); stitch(pos.x, pos.y); });
         });
-        events.forEach(function (ev) { ev.draw(clamp01((simTime - ev.t0) / ev.dur), emit); });
         tctx.stroke();
-
-        for (var level = 1; level <= 8; level++) {
-          var lo = (level - 1) / 8, hi = level / 8, any = false;
-          tctx.beginPath();
-          for (var i = 0; i < partial.length; i += 4) {
-            var s = partial[i + 2];
-            if (s > lo && s <= hi) { stitch(partial[i], partial[i + 1], s, partial[i + 3]); any = true; }
-          }
-          if (!any) continue;
-          tctx.lineWidth = STROKE * (lo + hi) / 2;
-          tctx.stroke();
-        }
       }
 
       function drawStage() {
@@ -420,23 +288,13 @@
       btnDrift.addEventListener("click", function () { drift = !drift; syncControls(); });
       document.getElementById("rngTempo").addEventListener("input", function (e) { tempo = parseFloat(e.target.value); });
 
-      // Click a motif to re-stitch it; click an empty cell to pull a neighbour in.
+      // Click an organism to startle it.
       stage.addEventListener("pointerdown", function (e) {
         if (document.documentElement.classList.contains("bare")) return;
-        var tx = mod((e.clientX + driftX) * T / TILE_CSS, T), ty = mod((e.clientY + driftY) * T / TILE_CSS, T);
-        var best = null, bestD = Infinity;
-        SLOTS.forEach(function (s) {
-          var d = Math.hypot(wrapT(tx - s.x), wrapT(ty - s.y));
-          if (d < bestD) { bestD = d; best = s; }
+        var tx = (e.clientX + driftX) * T / TILE_CSS, ty = (e.clientY + driftY) * T / TILE_CSS;
+        MOTIFS.forEach(function (m) {
+          if (Math.hypot(wrapT(tx - m.x), wrapT(ty - m.y)) < m.rMax + PITCH) m.pokedAt = simTime;
         });
-        if (!best || best.busy || bestD > T / CELLS / 2) return;
-        if (best.shape >= 0) {
-          startMorph(best, otherShape(best));
-        } else {
-          var callers = neighbours(best).filter(function (n) { return n.shape >= 0 && !n.busy; });
-          if (!callers.length) return;
-          startMigrate(pick(callers), best);
-        }
         if (!playing) { playing = true; syncControls(); }
       });
 
@@ -448,10 +306,9 @@
         last = now;
         if (playing) {
           simTime += dt * tempo;
-          step();
-          if (drift) { driftX += dt * tempo * 9; driftY += dt * tempo * 5; stageDirty = true; }
+          tileDirty = true;
+          if (drift) { driftX += dt * tempo * 9; driftY += dt * tempo * 5; }
         }
-        if (events.length) tileDirty = true;
         if (tileDirty) { drawTile(); tileDirty = false; stageDirty = true; }
         if (stageDirty) { drawStage(); stageDirty = false; }
       }
